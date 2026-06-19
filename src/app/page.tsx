@@ -1,5 +1,7 @@
 "use client";
 
+import JSZip from "jszip";
+
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -518,8 +520,12 @@ export default function Home() {
                   {showExportAllMenu && (
                     <div className="absolute right-0 top-10 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in" style={{ zIndex: 9999, position: "absolute" }}>
                       <div className="px-4 py-1 text-xs font-semibold" style={{ color: "var(--muted)" }}>Download All Results</div>
+                      <button onClick={downloadZip}
+                        className="w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center gap-2 text-blue-400 font-semibold border-b border-gray-700 mb-1">
+                        <Download size={13} /> ZIP — one .txt per provider ⭐
+                      </button>
                       {[
-                        { label: "All emails — grouped by host (.txt)", fmt: "grouped-txt" },
+                        { label: "All emails grouped by host (.txt)", fmt: "grouped-txt" },
                         { label: "All emails plain list (.txt)", fmt: "txt" },
                         { label: "Full spreadsheet (.csv)", fmt: "csv" },
                         { label: "Full data (.json)", fmt: "json" },

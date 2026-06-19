@@ -228,7 +228,27 @@ export default function Home() {
   }
 
   // Download emails for a specific provider group
-  function downloadProviderGroup(providerSlug: string | null, providerName: string | null, groupEmails: EmailEntry[], format: "txt" | "csv") {
+  async function downloadProviderGroup(providerSlug: string | null, providerName: string | null, groupEmails: EmailEntry[], format: "txt" | "csv") {
+    // Fetch full group data if we only have partial results loaded
+    if (totalResults > allResults.length || groupEmails.length < (totalResults > 0 ? 1 : 0)) {
+      notify("Fetching all emails for this provider…", "info");
+      const params = new URLSearchParams();
+      params.set("limit", "500");
+      params.set("page", "1");
+      if (providerSlug && providerSlug !== "__none__") params.set("provider", providerSlug);
+      else if (!providerSlug) params.set("filter", "undetected");
+      let page = 1;
+      const fetched: EmailEntry[] = [];
+      while (true) {
+        params.set("page", String(page));
+        const res = await fetch(\`/api/results?\${params}\`);
+        const data = await res.json();
+        fetched.push(...(data.results || []));
+        if (!data.hasMore) break;
+        page++;
+      }
+      groupEmails = fetched;
+    }
     const safeName = (providerName || "unknown").replace(/[^a-z0-9]/gi, "-").toLowerCase();
     if (format === "txt") {
       const content = groupEmails.map(r => r.email).join("\n");
@@ -247,9 +267,10 @@ export default function Home() {
   }
 
   // Download all results grouped by provider
-  function downloadAll(format: "txt" | "csv" | "json" | "grouped-txt") {
+  async function downloadAll(format: "txt" | "csv" | "json" | "grouped-txt") {
     setShowExportAllMenu(false);
-    const data = allResults;
+    notify("Preparing download… fetching all results", "info");
+    const data = await fetchAllResults();
 
     if (format === "grouped-txt") {
       // Group by provider, each with a header
@@ -280,9 +301,30 @@ export default function Home() {
     }
   }
 
-  async function downloadZip() {
+  async function fetchAllResults(): Promise<EmailEntry[]> {
+    const all: EmailEntry[] = [];
+    let page = 1;
+    while (true) {
+      const params = new URLSearchParams();
+      params.set("limit", "500");
+      params.set("page", String(page));
+      if (selectedSession) params.set("sessionId", selectedSession);
+      if (selectedProvider && selectedProvider !== "all") params.set("provider", selectedProvider);
+      if (search) params.set("search", search);
+      const res = await fetch(`/api/results?${params}`);
+      const data = await res.json();
+      all.push(...(data.results || []));
+      if (!data.hasMore) break;
+      page++;
+    }
+    return all;
+  }
+
+    async function downloadZip() {
     setShowExportAllMenu(false);
-    const groups = groupByProvider(allResults);
+    notify("Preparing ZIP… fetching all results", "info");
+    const fetchedResults = await fetchAllResults();
+    const groups = groupByProvider(fetchedResults);
     const zip = new JSZip();
     const folder = zip.folder("hosting-results")!;
 
@@ -299,7 +341,7 @@ export default function Home() {
 
     const csvLines = [
       ["Email", "Domain", "Provider", "Panel", "Country", "Detection", "NS Records", "MX Records"].join(","),
-      ...allResults.map(r => [
+      ...fetchedResults.map(r => [
         r.email, r.domain, r.providerName || "Unknown", r.providerPanel || "-",
         r.providerCountry || "-", r.detectionMethod || "-",
         (r.nsRecords || []).join("; "), (r.mxRecords || []).join("; "),

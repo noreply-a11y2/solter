@@ -1,600 +1,847 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Upload, CheckCircle2, XCircle, Server, Mail, Loader2,
-  Search, Filter, Download, Trash2, BarChart3, RefreshCw,
-  LogOut, FileText, Clock, ChevronDown, X, AlertCircle
+  Upload, CheckCircle2, Server, Mail, Loader2,
+  Search, Download, Trash2, BarChart3, RefreshCw,
+  LogOut, FileText, Clock, ChevronDown, X, AlertCircle,
+  StopCircle, Play, Eye, EyeOff, Copy, ChevronRight,
+  Zap, Shield, Activity, TrendingUp, Database, Globe, Filter
 } from "lucide-react";
 
-interface EmailResult {
-  id: string;
-  email: string;
-  domain: string;
-  isKonsoleh: boolean;
-  konsolehServer: string | null;
-  smtpVerified: boolean;
-  mxRecords: string[];
-  formatValid: boolean;
-  domainExists: boolean;
-  notes: string | null;
-  sessionId: string | null;
+interface EmailEntry {
+  id: string; email: string; domain: string; formatValid: boolean;
+  domainExists: boolean; nsRecords: string[]; mxRecords: string[];
+  aRecord: string | null; providerSlug: string | null; providerName: string | null;
+  providerPanel: string | null; providerCountry: string | null;
+  detectionMethod: string | null; confidence: string | null;
+  isKonsoleh: boolean; isCpanel: boolean; notes: string | null;
+  verifiedAt: string; sessionId: string | null;
 }
 
-interface Session {
-  id: string;
-  name: string;
-  totalCount: number;
-  konsolehCount: number;
-  validCount: number;
-  createdAt: string;
+interface SessionData {
+  id: string; name: string; totalCount: number;
+  konsolehCount: number; cpanelCount: number; createdAt: string;
+}
+
+interface ProviderStat {
+  slug: string | null; name: string | null; panel: string | null;
+  country: string | null; count: number;
 }
 
 interface Stats {
-  total: number;
-  konsolehCount: number;
-  validCount: number;
-  konsolehPercentage: string;
-  topDomains: Array<{ domain: string; total: number; konsoleh: number }>;
-  sessions: Session[];
+  total: number; konsolehCount: number; cpanelCount: number;
+  konsolehPercentage: string; cpanelPercentage: string;
+  topDomains: Array<{ domain: string; total: number; konsoleh: number; cpanel: number; provider?: string }>;
+  sessions: SessionData[];
+  providerBreakdown: ProviderStat[];
 }
 
 interface Progress {
-  completed: number;
-  total: number;
-  done: boolean;
+  completed: number; total: number; done: boolean; stopped: boolean;
+  skipped: number; konsolehFound: number; cpanelFound: number; currentEmail: string;
+}
+
+type TabType = "verify" | "results" | "analytics";
+
+const PROVIDER_COLORS: Record<string, string> = {
+  konsoleh: "bg-emerald-900/40 text-emerald-300 border-emerald-800/40",
+  afrihost: "bg-blue-900/40 text-blue-300 border-blue-800/40",
+  "1grid": "bg-orange-900/40 text-orange-300 border-orange-800/40",
+  elitehost: "bg-purple-900/40 text-purple-300 border-purple-800/40",
+  hostafrica: "bg-red-900/40 text-red-300 border-red-800/40",
+  cybersmart: "bg-cyan-900/40 text-cyan-300 border-cyan-800/40",
+  domains_co_za: "bg-teal-900/40 text-teal-300 border-teal-800/40",
+  webafrica: "bg-yellow-900/40 text-yellow-300 border-yellow-800/40",
+  rsaweb: "bg-indigo-900/40 text-indigo-300 border-indigo-800/40",
+  cloudflare: "bg-orange-900/40 text-orange-300 border-orange-800/40",
+  google: "bg-blue-900/40 text-blue-300 border-blue-800/40",
+  microsoft: "bg-sky-900/40 text-sky-300 border-sky-800/40",
+  godaddy: "bg-green-900/40 text-green-300 border-green-800/40",
+  ionos: "bg-indigo-900/40 text-indigo-300 border-indigo-800/40",
+};
+
+function badgeClass(slug: string | null) {
+  return PROVIDER_COLORS[slug || ""] || "bg-gray-800/60 text-gray-300 border-gray-700/40";
 }
 
 export default function Home() {
   const router = useRouter();
+  const [tab, setTab] = useState<TabType>("verify");
   const [emails, setEmails] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [verifying, setVerifying] = useState(false);
-  const [results, setResults] = useState<EmailResult[]>([]);
+  const [allResults, setAllResults] = useState<EmailEntry[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [filter, setFilter] = useState<"all" | "konsoleh">("all");
   const [search, setSearch] = useState("");
   const [sessionName, setSessionName] = useState("");
-  const [showStats, setShowStats] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [selectedSession, setSelectedSession] = useState<string>("");
-  const [showExportMenu, setShowExportMenu] = useState(false);
-  const [notification, setNotification] = useState<{ msg: string; type: "success" | "error" } | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<string>("all");
+  const [showProviderMenu, setShowProviderMenu] = useState(false);
+  const [showExportAllMenu, setShowExportAllMenu] = useState(false);
+  const [notification, setNotification] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [totalResults, setTotalResults] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [liveResults, setLiveResults] = useState<EmailEntry[]>([]);
+  const [showLive, setShowLive] = useState(true);
   const progressInterval = useRef<NodeJS.Timeout | null>(null);
+  const liveInterval = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const progressIdRef = useRef<string | null>(null);
+  const PAGE_SIZE = 50;
 
-  useEffect(() => {
-    checkAuth();
-  }, []);
-
-  useEffect(() => {
-    loadResults();
-  }, [filter, search, selectedSession]);
+  useEffect(() => { checkAuth(); }, []);
+  useEffect(() => { if (tab === "results") loadResults(1); }, [search, selectedSession, selectedProvider, tab]);
 
   async function checkAuth() {
     const res = await fetch("/api/auth/me");
     if (res.status === 401) router.push("/login");
-    else { loadResults(); loadStats(); }
+    else { loadResults(1); loadStats(); }
   }
 
-  function notify(msg: string, type: "success" | "error" = "success") {
+  function notify(msg: string, type: "success" | "error" | "info" = "success") {
     setNotification({ msg, type });
-    setTimeout(() => setNotification(null), 4000);
+    setTimeout(() => setNotification(null), 5000);
   }
 
-  async function loadResults() {
+  async function loadResults(page = 1) {
     try {
       const params = new URLSearchParams();
-      if (filter === "konsoleh") params.set("konsolehOnly", "true");
       if (search) params.set("search", search);
       if (selectedSession) params.set("sessionId", selectedSession);
-      params.set("limit", "200");
+      if (selectedProvider && selectedProvider !== "all") params.set("provider", selectedProvider);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("page", String(page));
       const res = await fetch(`/api/results?${params}`);
       if (res.status === 401) { router.push("/login"); return; }
       const data = await res.json();
-      setResults(data.results || []);
-    } catch (err) { console.error(err); }
+      setAllResults(prev => page === 1 ? (data.results || []) : [...prev, ...(data.results || [])]);
+      setTotalResults(data.total || 0);
+      setHasMore(data.hasMore || false);
+      setCurrentPage(page);
+    } catch {}
   }
 
   async function loadStats() {
     try {
       const res = await fetch("/api/stats");
       if (res.status === 401) return;
-      const data = await res.json();
-      setStats(data);
-    } catch (err) { console.error(err); }
+      setStats(await res.json());
+    } catch {}
+  }
+
+  async function stopVerification() {
+    if (!progressIdRef.current) return;
+    await fetch(`/api/verify?id=${progressIdRef.current}`, { method: "DELETE" });
+    notify("Stopping after current batch…", "info");
   }
 
   async function handleVerify() {
-    const emailList = emails
-      .split(/[\n,;]/)
-      .map((e) => e.trim())
-      .filter((e) => e.includes("@"));
+    const emailList = emails.split(/[\n,;]/).map(e => e.trim()).filter(e => e.includes("@"));
+    if (emailList.length === 0) { notify("No valid emails found", "error"); return; }
 
-    if (emailList.length === 0) { notify("Please enter at least one email address", "error"); return; }
-
-    setVerifying(true);
+    setVerifying(true); setLiveResults([]); setShowLive(true);
     const progressId = Math.random().toString(36).slice(2);
-    setProgress({ completed: 0, total: emailList.length, done: false });
+    progressIdRef.current = progressId;
+    setProgress({ completed: 0, total: emailList.length, done: false, stopped: false, skipped: 0, konsolehFound: 0, cpanelFound: 0, currentEmail: "" });
 
-    // Poll progress
     progressInterval.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/progress?id=${progressId}`);
-        const p = await res.json();
+        const p: Progress = await fetch(`/api/progress?id=${progressId}`).then(r => r.json());
         setProgress(p);
-        if (p.done) {
-          if (progressInterval.current) clearInterval(progressInterval.current);
-        }
+        if (p.done || p.stopped) clearInterval(progressInterval.current!);
       } catch {}
-    }, 800);
+    }, 600);
+
+    liveInterval.current = setInterval(async () => {
+      try {
+        const data = await fetch("/api/results?limit=30&page=1").then(r => r.json());
+        setLiveResults(data.results || []);
+      } catch {}
+    }, 2000);
 
     try {
       const res = await fetch("/api/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          emails: emailList,
-          sessionName: sessionName || `Session ${new Date().toLocaleString()}`,
-          progressId,
-        }),
+        body: JSON.stringify({ emails: emailList, sessionName: sessionName || `Scan ${new Date().toLocaleString()}`, progressId }),
       });
-
       const data = await res.json();
-      if (progressInterval.current) clearInterval(progressInterval.current);
-
+      clearInterval(progressInterval.current!);
+      clearInterval(liveInterval.current!);
       if (data.success) {
-        notify(`✓ Verified ${data.total} emails — KonsoleH: ${data.konsolehCount}, SMTP Valid: ${data.validCount}`);
-        setEmails("");
-        setSessionName("");
-        setFile(null);
+        const skip = data.skippedCount > 0 ? ` · ${data.skippedCount} skipped` : "";
+        notify(`✓ ${data.total} scanned · KonsoleH: ${data.konsolehCount} · cPanel: ${data.cpanelCount}${skip}`);
+        setEmails(""); setSessionName(""); setFile(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
-        await loadResults();
-        await loadStats();
+        await loadResults(1); await loadStats(); setTab("results");
       } else {
-        notify(data.error || "Verification failed", "error");
+        notify(data.error || "Scan failed", "error");
       }
     } catch (err: any) {
-      if (progressInterval.current) clearInterval(progressInterval.current);
+      clearInterval(progressInterval.current!);
+      clearInterval(liveInterval.current!);
       notify(err?.message || "Network error", "error");
     } finally {
-      setVerifying(false);
-      setTimeout(() => setProgress(null), 2000);
+      setVerifying(false); progressIdRef.current = null;
+      setTimeout(() => setProgress(null), 3000);
     }
   }
 
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const uploadedFile = e.target.files?.[0];
-    if (!uploadedFile) return;
-    setFile(uploadedFile);
+    const f = e.target.files?.[0]; if (!f) return;
+    setFile(f);
     const reader = new FileReader();
-    reader.onload = (evt) => setEmails(evt.target?.result as string);
-    reader.readAsText(uploadedFile);
+    reader.onload = evt => setEmails(evt.target?.result as string);
+    reader.readAsText(f);
   }
 
   async function deleteEntry(id: string) {
-    try {
-      await fetch(`/api/results?id=${id}`, { method: "DELETE" });
-      setResults(prev => prev.filter(r => r.id !== id));
-      notify("Entry deleted");
-    } catch { notify("Error deleting entry", "error"); }
+    await fetch(`/api/results?id=${id}`, { method: "DELETE" });
+    setAllResults(prev => prev.filter(r => r.id !== id));
+    setTotalResults(prev => prev - 1);
   }
 
-  async function deleteSession(sessionId: string) {
+  async function deleteSession(sid: string) {
     if (!confirm("Delete this session and all its entries?")) return;
-    try {
-      await fetch(`/api/results?sessionId=${sessionId}`, { method: "DELETE" });
-      setSelectedSession("");
-      await loadResults();
-      await loadStats();
-      notify("Session deleted");
-    } catch { notify("Error deleting session", "error"); }
+    await fetch(`/api/results?sessionId=${sid}`, { method: "DELETE" });
+    setSelectedSession(""); await loadResults(1); await loadStats();
+    notify("Session deleted");
   }
 
   async function clearAll() {
-    if (!confirm("Delete ALL verification data? This cannot be undone.")) return;
-    try {
-      await fetch("/api/results", { method: "DELETE" });
-      await loadResults();
-      await loadStats();
-      notify("All data cleared");
-    } catch { notify("Error clearing data", "error"); }
+    if (!confirm("Delete ALL data? Cannot be undone.")) return;
+    await fetch("/api/results", { method: "DELETE" });
+    setAllResults([]); setTotalResults(0); await loadStats();
+    notify("All data cleared");
   }
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text);
+    notify("Copied", "info");
   }
 
-  function exportData(format: "csv" | "txt" | "json" | "konsoleh-only-txt") {
-    setShowExportMenu(false);
-    const filtered = format === "konsoleh-only-txt"
-      ? results.filter(r => r.isKonsoleh)
-      : results;
-
-    let content = "";
-    let filename = `konsoleh-verification-${Date.now()}`;
-    let mime = "text/plain";
-
-    if (format === "csv") {
-      content = [
-        ["Email", "Domain", "KonsoleH Hosted", "KonsoleH Server", "SMTP Valid", "Domain Exists", "MX Records", "Notes"].join(","),
-        ...filtered.map(r => [
-          r.email, r.domain,
-          r.isKonsoleh ? "Yes" : "No",
-          r.konsolehServer || "-",
-          r.smtpVerified ? "Yes" : "No",
-          r.domainExists ? "Yes" : "No",
-          (r.mxRecords || []).join("; "),
-          r.notes || "",
-        ].join(","))
+  // Download emails for a specific provider group
+  function downloadProviderGroup(providerSlug: string | null, providerName: string | null, groupEmails: EmailEntry[], format: "txt" | "csv") {
+    const safeName = (providerName || "unknown").replace(/[^a-z0-9]/gi, "-").toLowerCase();
+    if (format === "txt") {
+      const content = groupEmails.map(r => r.email).join("\n");
+      triggerDownload(content, `${safeName}-emails.txt`, "text/plain");
+    } else {
+      const content = [
+        ["Email", "Domain", "Provider", "Panel", "Country", "Detection", "NS Records", "MX Records"].join(","),
+        ...groupEmails.map(r => [
+          r.email, r.domain, r.providerName || "Unknown", r.providerPanel || "-",
+          r.providerCountry || "-", r.detectionMethod || "-",
+          (r.nsRecords || []).join("; "), (r.mxRecords || []).join("; "),
+        ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
       ].join("\n");
-      filename += ".csv";
-      mime = "text/csv";
-    } else if (format === "txt") {
-      content = filtered.map(r =>
-        `${r.email} | ${r.isKonsoleh ? "KonsoleH" : "Not KonsoleH"} | SMTP: ${r.smtpVerified ? "Valid" : "Invalid"} | ${r.konsolehServer || r.domain}`
-      ).join("\n");
-      filename += ".txt";
-    } else if (format === "konsoleh-only-txt") {
-      content = filtered.map(r => r.email).join("\n");
-      filename += "-konsoleh-emails.txt";
-    } else if (format === "json") {
-      content = JSON.stringify(filtered, null, 2);
-      filename += ".json";
-      mime = "application/json";
+      triggerDownload(content, `${safeName}-emails.csv`, "text/csv");
     }
+  }
 
+  // Download all results grouped by provider
+  function downloadAll(format: "txt" | "csv" | "json" | "grouped-txt") {
+    setShowExportAllMenu(false);
+    const data = allResults;
+
+    if (format === "grouped-txt") {
+      // Group by provider, each with a header
+      const groups = groupByProvider(data);
+      const lines: string[] = [];
+      for (const [slug, group] of groups) {
+        const name = group.emails[0]?.providerName || "Unknown";
+        lines.push(`# ${name} (${group.emails.length} emails)`);
+        lines.push(...group.emails.map(r => r.email));
+        lines.push("");
+      }
+      triggerDownload(lines.join("\n"), `all-hosts-grouped-${Date.now()}.txt`, "text/plain");
+    } else if (format === "txt") {
+      triggerDownload(data.map(r => r.email).join("\n"), `all-emails-${Date.now()}.txt`, "text/plain");
+    } else if (format === "csv") {
+      const content = [
+        ["Email", "Domain", "Provider", "Panel", "Country", "Detection", "Confidence", "KonsoleH", "cPanel", "NS Records", "MX Records", "IP"].join(","),
+        ...data.map(r => [
+          r.email, r.domain, r.providerName || "Unknown", r.providerPanel || "-",
+          r.providerCountry || "-", r.detectionMethod || "-", r.confidence || "-",
+          r.isKonsoleh ? "Yes" : "No", r.isCpanel ? "Yes" : "No",
+          (r.nsRecords || []).join("; "), (r.mxRecords || []).join("; "), r.aRecord || "-",
+        ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      ].join("\n");
+      triggerDownload(content, `all-emails-${Date.now()}.csv`, "text/csv");
+    } else if (format === "json") {
+      triggerDownload(JSON.stringify(data, null, 2), `all-emails-${Date.now()}.json`, "application/json");
+    }
+  }
+
+  function triggerDownload(content: string, filename: string, mime: string) {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = filename; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
   }
 
-  const filteredResults = results.filter(r => {
-    if (filter === "konsoleh" && !r.isKonsoleh) return false;
-    if (search && !r.email.toLowerCase().includes(search.toLowerCase()) &&
-        !r.domain.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  // Group results by provider
+  function groupByProvider(results: EmailEntry[]): Map<string, { name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }> {
+    const map = new Map<string, { name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }>();
+    for (const r of results) {
+      const key = r.providerSlug || "__unknown__";
+      if (!map.has(key)) map.set(key, { name: r.providerName, slug: r.providerSlug, panel: r.providerPanel, emails: [] });
+      map.get(key)!.emails.push(r);
+    }
+    // Sort: known providers first, then by count desc
+    return new Map([...map.entries()].sort((a, b) => {
+      if (a[0] === "__unknown__") return 1;
+      if (b[0] === "__unknown__") return -1;
+      return b[1].emails.length - a[1].emails.length;
+    }));
+  }
 
-  const progressPct = progress && progress.total > 0
-    ? Math.round((progress.completed / progress.total) * 100)
-    : 0;
+  const emailCount = emails.split(/[\n,;]/).filter(e => e.trim().includes("@")).length;
+  const progressPct = progress && progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
+  const providerGroups = groupByProvider(allResults);
+  const activeProviderName = selectedProvider === "all" ? "All Providers" :
+    stats?.providerBreakdown.find(p => p.slug === selectedProvider)?.name || selectedProvider;
 
   return (
-    <main className="min-h-screen p-4 md:p-8" style={{ background: "var(--bg)" }}>
-      {/* Notification */}
+    <main className="min-h-screen" style={{ background: "var(--bg)" }}>
       {notification && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium fade-in flex items-center gap-2 ${
-          notification.type === "error" ? "bg-red-900/90 border border-red-700 text-red-200" : "bg-green-900/90 border border-green-700 text-green-200"
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl text-sm font-medium fade-in flex items-center gap-2 max-w-sm ${
+          notification.type === "error" ? "bg-red-950 border border-red-700/50 text-red-200" :
+          notification.type === "info" ? "bg-blue-950 border border-blue-700/50 text-blue-200" :
+          "bg-emerald-950 border border-emerald-700/50 text-emerald-200"
         }`}>
-          {notification.type === "error" ? <AlertCircle size={16} /> : <CheckCircle2 size={16} />}
+          {notification.type === "error" ? <AlertCircle size={16} /> : notification.type === "info" ? <Activity size={16} /> : <CheckCircle2 size={16} />}
           {notification.msg}
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6">
         {/* Header */}
-        <div className="mb-6 flex items-center justify-between fade-in">
+        <div className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
-              <Server size={20} className="text-white" />
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-lg shadow-blue-900/30">
+              <Shield size={20} className="text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold">KonsoleH Verifier</h1>
-              <p className="text-xs" style={{ color: "var(--muted)" }}>Detect konsoleH.co.za / xneelo hosting</p>
+              <h1 className="text-xl font-bold tracking-tight">Domain Host Detector</h1>
+              <p className="text-xs" style={{ color: "var(--muted)" }}>KonsoleH · xneelo · cPanel · All SA hosts</p>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition text-sm"
-            style={{ color: "var(--muted)" }}
-          >
-            <LogOut size={16} /> Logout
-          </button>
-        </div>
-
-        {/* Stats Bar */}
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5 fade-in">
-            <StatCard icon={<Mail size={18} className="text-blue-400" />} label="Total Verified" value={stats.total.toLocaleString()} />
-            <StatCard icon={<Server size={18} className="text-green-400" />} label="KonsoleH" value={stats.konsolehCount.toLocaleString()} subtitle={`${stats.konsolehPercentage}%`} />
-            <StatCard icon={<CheckCircle2 size={18} className="text-emerald-400" />} label="SMTP Valid" value={stats.validCount.toLocaleString()} />
-            <button onClick={() => setShowStats(!showStats)} className="glass rounded-xl p-4 hover:bg-gray-800 transition text-left">
-              <div className="flex items-center gap-2 mb-1">
-                <BarChart3 size={18} className="text-purple-400" />
-                <span className="text-xs" style={{ color: "var(--muted)" }}>Analytics</span>
+          <div className="flex items-center gap-2">
+            {stats && (
+              <div className="hidden md:flex items-center gap-3 text-xs px-3 py-1.5 rounded-lg" style={{ background: "var(--panel)", color: "var(--muted)" }}>
+                <span><span className="text-white font-semibold">{stats.total.toLocaleString()}</span> scanned</span>
+                <span className="opacity-30">|</span>
+                <span><span className="text-emerald-400 font-semibold">{stats.konsolehCount.toLocaleString()}</span> KonsoleH</span>
+                <span className="opacity-30">|</span>
+                <span><span className="text-blue-400 font-semibold">{stats.cpanelCount.toLocaleString()}</span> cPanel</span>
               </div>
-              <div className="text-lg font-bold">{showStats ? "Hide" : "View"}</div>
+            )}
+            <button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); router.push("/login"); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition hover:bg-gray-800" style={{ color: "var(--muted)" }}>
+              <LogOut size={14} /> Logout
             </button>
           </div>
-        )}
+        </div>
 
-        {/* Analytics Panel */}
-        {showStats && stats && (
-          <div className="glass rounded-xl p-5 mb-5 fade-in">
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Top Domains */}
-              <div>
-                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                  <BarChart3 size={16} /> Top Domains
-                </h3>
-                <div className="space-y-1.5">
-                  {stats.topDomains.map((d) => (
-                    <div key={d.domain} className="flex items-center justify-between py-1.5 border-b border-gray-800 text-sm">
-                      <span className="font-mono text-xs">{d.domain}</span>
-                      <div className="flex items-center gap-3 text-xs">
-                        <span style={{ color: "var(--muted)" }}>{d.total} total</span>
-                        {d.konsoleh > 0 && <span className="text-green-400 font-semibold">KH: {d.konsoleh}</span>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+        {/* Tabs */}
+        <div className="flex items-center gap-1 mb-5 p-1 rounded-xl w-fit" style={{ background: "var(--panel)" }}>
+          {([
+            { id: "verify", label: "Scan", icon: <Zap size={14} /> },
+            { id: "results", label: `Results${totalResults > 0 ? ` (${totalResults.toLocaleString()})` : ""}`, icon: <Database size={14} /> },
+            { id: "analytics", label: "Analytics", icon: <BarChart3 size={14} /> },
+          ] as { id: TabType; label: string; icon: React.ReactNode }[]).map(t => (
+            <button key={t.id}
+              onClick={() => { setTab(t.id); if (t.id === "results") loadResults(1); if (t.id === "analytics") loadStats(); }}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition ${tab === t.id ? "bg-blue-600 text-white" : "hover:bg-gray-800"}`}
+              style={tab !== t.id ? { color: "var(--muted)" } : {}}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── SCAN TAB ── */}
+        {tab === "verify" && (
+          <div className="grid lg:grid-cols-5 gap-5 fade-in">
+            <div className="lg:col-span-3 glass rounded-xl p-5">
+              <h2 className="text-sm font-semibold mb-4 flex items-center gap-2"><Upload size={15} /> Email Input</h2>
+              <input type="text" placeholder="Session name (optional)" value={sessionName}
+                onChange={e => setSessionName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg mb-3 bg-gray-800 border border-gray-700 outline-none focus:border-blue-500 transition text-sm" />
+              <textarea
+                placeholder={"Paste emails — one per line, comma or semicolon separated\n\nDetects: KonsoleH, Afrihost, 1-Grid, Elitehost, HostAfrica,\nCybersmart, GoDaddy, Google Workspace, Microsoft 365, Cloudflare, and more\n\nResults are grouped by hosting provider so you can\ndownload each host's emails separately."}
+                value={emails} onChange={e => setEmails(e.target.value)}
+                className="w-full h-52 px-3 py-2.5 rounded-lg bg-gray-800 border border-gray-700 outline-none focus:border-blue-500 transition font-mono text-xs resize-none" />
+              <div className="flex items-center justify-between mt-2 mb-3 text-xs" style={{ color: "var(--muted)" }}>
+                <span>{emailCount > 0 ? <><span className="text-white font-semibold">{emailCount.toLocaleString()}</span> emails</> : "No emails detected"}</span>
               </div>
-              {/* Sessions */}
-              <div>
-                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
-                  <Clock size={16} /> Recent Sessions
-                </h3>
-                <div className="space-y-1.5">
-                  {stats.sessions.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between py-1.5 border-b border-gray-800">
-                      <div>
-                        <button
-                          onClick={() => { setSelectedSession(s.id === selectedSession ? "" : s.id); setShowStats(false); }}
-                          className="text-xs font-medium hover:text-blue-400 transition text-left"
-                        >
-                          {s.name}
-                        </button>
-                        <div className="text-xs" style={{ color: "var(--muted)" }}>
-                          {s.totalCount} emails · {s.konsolehCount} KH
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => deleteSession(s.id)}
-                        className="p-1 rounded hover:bg-red-900/30 transition"
-                        style={{ color: "var(--muted)" }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
+
+              {progress && (
+                <div className="mb-4 p-3 rounded-xl bg-blue-950/40 border border-blue-800/30 fade-in">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      {!progress.done && !progress.stopped ? <Loader2 size={14} className="spin text-blue-400" /> :
+                        progress.stopped ? <StopCircle size={14} className="text-orange-400" /> :
+                        <CheckCircle2 size={14} className="text-green-400" />}
+                      <span className="text-xs font-semibold">
+                        {progress.stopped ? "Stopped" : progress.done ? "Complete" : "Scanning…"}
+                      </span>
                     </div>
-                  ))}
-                  {stats.sessions.length === 0 && (
-                    <p className="text-xs" style={{ color: "var(--muted)" }}>No sessions yet</p>
+                    <span className="text-xs font-mono" style={{ color: "var(--muted)" }}>
+                      {progress.completed.toLocaleString()} / {progress.total.toLocaleString()} · {progressPct}%
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden mb-2">
+                    <div className={`h-full rounded-full transition-all duration-300 ${progress.stopped ? "bg-orange-500" : "bg-blue-500"}`} style={{ width: `${progressPct}%` }} />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    <MiniStat label="KonsoleH" value={progress.konsolehFound} color="text-emerald-400" />
+                    <MiniStat label="cPanel" value={progress.cpanelFound} color="text-blue-400" />
+                    <MiniStat label="Skipped" value={progress.skipped} color="text-yellow-400" />
+                  </div>
+                  {progress.currentEmail && !progress.done && (
+                    <div className="text-xs font-mono truncate" style={{ color: "var(--muted)" }}>→ {progress.currentEmail}</div>
+                  )}
+                  {!progress.done && !progress.stopped && (
+                    <button onClick={stopVerification}
+                      className="mt-2 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-900/30 hover:bg-red-900/50 text-red-400 text-xs transition w-full justify-center">
+                      <StopCircle size={13} /> Stop Scan
+                    </button>
                   )}
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
+              )}
 
-        {/* Session filter badge */}
-        {selectedSession && stats && (
-          <div className="flex items-center gap-2 mb-4 fade-in">
-            <span className="text-xs px-3 py-1.5 rounded-full bg-blue-900/30 border border-blue-800/30 text-blue-400 flex items-center gap-2">
-              <Filter size={12} />
-              Filtering by: {stats.sessions.find(s => s.id === selectedSession)?.name || "Session"}
-              <button onClick={() => setSelectedSession("")} className="hover:text-white transition">
-                <X size={12} />
-              </button>
-            </span>
-          </div>
-        )}
-
-        <div className="grid lg:grid-cols-2 gap-5">
-          {/* Input Panel */}
-          <div className="glass rounded-xl p-5 fade-in">
-            <h2 className="text-base font-semibold mb-4 flex items-center gap-2">
-              <Upload size={18} /> Verify Emails
-            </h2>
-
-            <input
-              type="text"
-              placeholder="Session name (optional)"
-              value={sessionName}
-              onChange={(e) => setSessionName(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg mb-3 bg-gray-800 border border-gray-700 outline-none focus:border-blue-500 transition text-sm"
-            />
-
-            <textarea
-              placeholder={"Enter emails (one per line, comma or semicolon separated)\n\nExample:\nuser1@example.co.za\nuser2@company.com\nadmin@business.co.za\n\nNo limit — paste as many as you need."}
-              value={emails}
-              onChange={(e) => setEmails(e.target.value)}
-              className="w-full h-56 px-3 py-2.5 rounded-lg bg-gray-800 border border-gray-700 outline-none focus:border-blue-500 transition font-mono text-xs resize-none"
-            />
-
-            {/* Email count */}
-            {emails.trim() && (
-              <div className="text-xs mt-1 mb-3" style={{ color: "var(--muted)" }}>
-                {emails.split(/[\n,;]/).filter(e => e.trim().includes("@")).length.toLocaleString()} emails detected
-              </div>
-            )}
-
-            {/* Progress Bar */}
-            {progress && (
-              <div className="mb-3 fade-in">
-                <div className="flex items-center justify-between text-xs mb-1.5" style={{ color: "var(--muted)" }}>
-                  <span>Verifying... {progress.completed.toLocaleString()} / {progress.total.toLocaleString()}</span>
-                  <span>{progressPct}%</span>
-                </div>
-                <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-500"
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center gap-2 mt-1">
-              <label className="flex-1 cursor-pointer">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 hover:border-gray-600 transition text-sm">
-                  <Upload size={14} />
-                  <span className="text-xs truncate">{file ? file.name : "Upload .txt or .csv"}</span>
-                </div>
-                <input ref={fileInputRef} type="file" accept=".txt,.csv" onChange={handleFileUpload} className="hidden" />
-              </label>
-
-              <button
-                onClick={handleVerify}
-                disabled={verifying || !emails.trim()}
-                className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold transition flex items-center gap-2 text-sm"
-              >
-                {verifying ? <><Loader2 size={16} className="spin" /> Verifying</> : <><CheckCircle2 size={16} /> Verify</>}
-              </button>
-            </div>
-
-            <div className="mt-3 p-3 rounded-lg bg-blue-900/20 border border-blue-800/30">
-              <p className="text-xs" style={{ color: "var(--muted)" }}>
-                <strong className="text-blue-400">Detection:</strong> Checks MX records for konsoleH.co.za, xneelo.com, your-server.de, hetzner.co.za patterns. Performs DNS + SMTP verification. No email limit.
-              </p>
-            </div>
-          </div>
-
-          {/* Results Panel */}
-          <div className="glass rounded-xl p-5 fade-in">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-base font-semibold flex items-center gap-2">
-                <Mail size={18} /> Results ({filteredResults.length.toLocaleString()})
-              </h2>
-              <div className="flex items-center gap-1.5">
-                <button onClick={loadResults} className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 transition" title="Refresh">
-                  <RefreshCw size={14} />
+              <div className="flex items-center gap-2">
+                <label className="flex-1 cursor-pointer">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 hover:border-gray-600 transition">
+                    <Upload size={14} />
+                    <span className="text-xs truncate" style={{ color: "var(--muted)" }}>{file ? file.name : "Upload .txt or .csv"}</span>
+                  </div>
+                  <input ref={fileInputRef} type="file" accept=".txt,.csv" onChange={handleFileUpload} className="hidden" />
+                </label>
+                <button onClick={handleVerify} disabled={verifying || emailCount === 0}
+                  className="px-6 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-semibold transition flex items-center gap-2 text-sm">
+                  {verifying ? <><Loader2 size={15} className="spin" /> Scanning</> : <><Play size={15} /> Start Scan</>}
                 </button>
+              </div>
+            </div>
 
-                {/* Export Menu */}
+            {/* Live feed */}
+            <div className="lg:col-span-2 glass rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold flex items-center gap-2">
+                  <Activity size={15} className={verifying ? "text-green-400 animate-pulse" : ""} />
+                  Live Feed {verifying && <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/30 text-green-400">LIVE</span>}
+                </h2>
+                <button onClick={() => setShowLive(!showLive)} style={{ color: "var(--muted)" }}>
+                  {showLive ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              {showLive && (
+                <div className="space-y-1.5 max-h-[460px] overflow-y-auto">
+                  {(verifying ? liveResults : allResults.slice(0, 25)).length === 0 ? (
+                    <div className="text-center py-20" style={{ color: "var(--muted)" }}>
+                      <Zap size={32} className="mx-auto mb-3 opacity-20" />
+                      <p className="text-xs">Results appear here during scan</p>
+                    </div>
+                  ) : (verifying ? liveResults : allResults.slice(0, 25)).map(r => (
+                    <LiveRow key={r.id} result={r} onCopy={copyToClipboard} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── RESULTS TAB — grouped by provider ── */}
+        {tab === "results" && (
+          <div className="fade-in space-y-4">
+            {/* Toolbar */}
+            <div className="glass rounded-xl p-4 flex flex-wrap items-center gap-3">
+              {/* Provider filter dropdown */}
+              <div className="relative">
+                <button onClick={() => setShowProviderMenu(!showProviderMenu)}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition text-sm">
+                  <Filter size={13} />
+                  <span className="max-w-32 truncate">{activeProviderName}</span>
+                  <ChevronDown size={12} />
+                </button>
+                {showProviderMenu && (
+                  <div className="absolute left-0 top-10 z-30 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in max-h-72 overflow-y-auto">
+                    <button onClick={() => { setSelectedProvider("all"); setShowProviderMenu(false); loadResults(1); }}
+                      className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition ${selectedProvider === "all" ? "text-blue-400 font-semibold" : ""}`}>
+                      All Providers ({totalResults.toLocaleString()})
+                    </button>
+                    <div className="border-t border-gray-700 my-1" />
+                    {stats?.providerBreakdown.map(p => (
+                      <button key={p.slug} onClick={() => { setSelectedProvider(p.slug || ""); setShowProviderMenu(false); loadResults(1); }}
+                        className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center justify-between ${selectedProvider === p.slug ? "text-blue-400 font-semibold" : ""}`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${badgeClass(p.slug).split(" ")[0].replace("bg-", "bg-").replace("/40", "")}`} />
+                          <span className="truncate max-w-36">{p.name || "Unknown"}</span>
+                        </div>
+                        <span style={{ color: "var(--muted)" }}>{p.count}</span>
+                      </button>
+                    ))}
+                    {/* Unknown */}
+                    <button onClick={() => { setSelectedProvider("__none__"); setShowProviderMenu(false); loadResults(1); }}
+                      className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition ${selectedProvider === "__none__" ? "text-blue-400 font-semibold" : ""}`}
+                      style={{ color: "var(--muted)" }}>
+                      Unknown / Undetected
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Search */}
+              <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 min-w-40">
+                <Search size={13} style={{ color: "var(--muted)" }} />
+                <input type="text" placeholder="Search email or domain…" value={search}
+                  onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+                  className="bg-transparent outline-none flex-1 text-xs" />
+                {search && <button onClick={() => setSearch("")}><X size={12} /></button>}
+              </div>
+
+              <div className="flex items-center gap-1.5 ml-auto">
+                <button onClick={() => loadResults(1)} className="p-2 rounded-lg hover:bg-gray-800 transition" title="Refresh"><RefreshCw size={14} /></button>
+
+                {/* Download All menu */}
                 <div className="relative">
-                  <button
-                    onClick={() => setShowExportMenu(!showExportMenu)}
-                    disabled={results.length === 0}
-                    className="p-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 disabled:opacity-50 transition flex items-center gap-1"
-                    title="Export"
-                  >
-                    <Download size={14} />
-                    <ChevronDown size={12} />
+                  <button onClick={() => setShowExportAllMenu(!showExportAllMenu)} disabled={allResults.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 transition text-xs font-medium">
+                    <Download size={13} /> Download All <ChevronDown size={11} />
                   </button>
-                  {showExportMenu && (
-                    <div className="absolute right-0 top-8 z-20 glass rounded-lg shadow-xl py-1 w-48 fade-in">
+                  {showExportAllMenu && (
+                    <div className="absolute right-0 top-10 z-30 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in">
+                      <div className="px-4 py-1 text-xs font-semibold" style={{ color: "var(--muted)" }}>Download All Results</div>
                       {[
-                        { label: "Export as CSV", fmt: "csv" as const },
-                        { label: "Export as TXT", fmt: "txt" as const },
-                        { label: "Export as JSON", fmt: "json" as const },
-                        { label: "KonsoleH emails only (.txt)", fmt: "konsoleh-only-txt" as const },
+                        { label: "All emails — grouped by host (.txt)", fmt: "grouped-txt" },
+                        { label: "All emails plain list (.txt)", fmt: "txt" },
+                        { label: "Full spreadsheet (.csv)", fmt: "csv" },
+                        { label: "Full data (.json)", fmt: "json" },
                       ].map(({ label, fmt }) => (
-                        <button key={fmt} onClick={() => exportData(fmt)} className="w-full text-left px-4 py-2 text-sm hover:bg-gray-700 transition flex items-center gap-2">
-                          <FileText size={14} /> {label}
+                        <button key={fmt} onClick={() => downloadAll(fmt as any)}
+                          className="w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center gap-2">
+                          <FileText size={13} /> {label}
                         </button>
                       ))}
                     </div>
                   )}
                 </div>
 
-                <button
-                  onClick={clearAll}
-                  disabled={results.length === 0}
-                  className="p-1.5 rounded-lg bg-red-900/30 hover:bg-red-900/50 disabled:opacity-50 transition"
-                  title="Clear all"
-                >
+                <button onClick={clearAll} disabled={allResults.length === 0}
+                  className="p-2 rounded-lg bg-red-900/20 hover:bg-red-900/40 disabled:opacity-50 transition text-red-400" title="Clear all">
                   <Trash2 size={14} />
                 </button>
               </div>
             </div>
 
-            {/* Filters */}
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex items-center gap-1 rounded-lg bg-gray-800 p-1">
-                <button
-                  onClick={() => setFilter("all")}
-                  className={`px-3 py-1 rounded text-xs transition ${filter === "all" ? "bg-blue-600" : "hover:bg-gray-700"}`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setFilter("konsoleh")}
-                  className={`px-3 py-1 rounded text-xs transition flex items-center gap-1 ${filter === "konsoleh" ? "bg-green-600" : "hover:bg-gray-700"}`}
-                >
-                  <Server size={12} /> KonsoleH
-                </button>
+            {/* Grouped results */}
+            {allResults.length === 0 ? (
+              <div className="glass rounded-xl p-16 text-center" style={{ color: "var(--muted)" }}>
+                <Database size={40} className="mx-auto mb-3 opacity-20" />
+                <p className="text-sm">No results yet</p>
+                <p className="text-xs mt-1">Run a scan from the Scan tab</p>
               </div>
-              <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-800">
-                <Search size={14} style={{ color: "var(--muted)" }} />
-                <input
-                  type="text"
-                  placeholder="Search..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="bg-transparent outline-none flex-1 text-xs"
-                />
-              </div>
+            ) : selectedProvider !== "all" ? (
+              /* Single provider view */
+              <ProviderGroup
+                slug={selectedProvider === "__none__" ? null : selectedProvider}
+                name={activeProviderName}
+                panel={stats?.providerBreakdown.find(p => p.slug === selectedProvider)?.panel || null}
+                emails={allResults}
+                expandedId={expandedId}
+                onToggle={id => setExpandedId(expandedId === id ? null : id)}
+                onDelete={deleteEntry}
+                onCopy={copyToClipboard}
+                onDownload={(fmt) => downloadProviderGroup(selectedProvider === "__none__" ? null : selectedProvider, activeProviderName, allResults, fmt)}
+                hasMore={hasMore}
+                total={totalResults}
+                onLoadMore={() => loadResults(currentPage + 1)}
+              />
+            ) : (
+              /* All providers grouped */
+              <>
+                {[...providerGroups.entries()].map(([key, group]) => (
+                  <ProviderGroup
+                    key={key}
+                    slug={group.slug}
+                    name={group.name || "Unknown / Undetected"}
+                    panel={group.panel}
+                    emails={group.emails}
+                    expandedId={expandedId}
+                    onToggle={id => setExpandedId(expandedId === id ? null : id)}
+                    onDelete={deleteEntry}
+                    onCopy={copyToClipboard}
+                    onDownload={(fmt) => downloadProviderGroup(group.slug, group.name, group.emails, fmt)}
+                  />
+                ))}
+                {hasMore && (
+                  <button onClick={() => loadResults(currentPage + 1)}
+                    className="w-full py-3 rounded-xl glass hover:bg-gray-800 transition text-xs" style={{ color: "var(--muted)" }}>
+                    Load more ({totalResults - allResults.length} remaining)
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── ANALYTICS TAB ── */}
+        {tab === "analytics" && stats && (
+          <div className="fade-in space-y-5">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard icon={<Mail size={18} className="text-blue-400" />} label="Total Scanned" value={stats.total.toLocaleString()} />
+              <StatCard icon={<Server size={18} className="text-emerald-400" />} label="KonsoleH / xneelo" value={stats.konsolehCount.toLocaleString()} subtitle={`${stats.konsolehPercentage}%`} />
+              <StatCard icon={<Globe size={18} className="text-blue-400" />} label="cPanel Hosts" value={stats.cpanelCount.toLocaleString()} subtitle={`${stats.cpanelPercentage}%`} />
+              <StatCard icon={<TrendingUp size={18} className="text-purple-400" />} label="Sessions" value={stats.sessions.length.toLocaleString()} />
             </div>
 
-            {/* Results List */}
-            <div className="space-y-1.5 max-h-[520px] overflow-y-auto pr-1">
-              {filteredResults.length === 0 ? (
-                <div className="text-center py-16" style={{ color: "var(--muted)" }}>
-                  <Mail size={36} className="mx-auto mb-3 opacity-20" />
-                  <p className="text-sm">No results yet.</p>
-                </div>
-              ) : (
-                filteredResults.map((result) => (
-                  <div key={result.id} className="p-2.5 rounded-lg bg-gray-800/50 border border-gray-700 hover:border-gray-600 transition group">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-mono text-xs mb-1 truncate">{result.email}</div>
-                        <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                          <span style={{ color: "var(--muted)" }}>{result.domain}</span>
-                          {result.isKonsoleh && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-green-900/30 text-green-400 font-semibold flex items-center gap-1 text-xs">
-                              <Server size={10} /> KonsoleH
-                            </span>
-                          )}
-                          {result.smtpVerified && (
-                            <span className="px-1.5 py-0.5 rounded-full bg-emerald-900/30 text-emerald-400 text-xs">SMTP ✓</span>
-                          )}
-                        </div>
-                        {result.konsolehServer && (
-                          <div className="text-xs mt-0.5 font-mono" style={{ color: "var(--muted)" }}>
-                            {result.konsolehServer}
-                          </div>
-                        )}
+            <div className="grid md:grid-cols-3 gap-5">
+              {/* Provider breakdown with download buttons */}
+              <div className="glass rounded-xl p-5">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2"><Shield size={15} /> By Hosting Provider</h3>
+                <div className="space-y-2">
+                  {stats.providerBreakdown.length === 0 ? (
+                    <p className="text-xs text-center py-8" style={{ color: "var(--muted)" }}>No data yet</p>
+                  ) : stats.providerBreakdown.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 py-1 border-b border-gray-800 last:border-0">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <span className={`px-2 py-0.5 rounded-full border text-xs truncate max-w-28 ${badgeClass(p.slug)}`}>{p.name || "Unknown"}</span>
+                        {p.panel && <span className="text-xs opacity-50">{p.panel}</span>}
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {result.domainExists ? <CheckCircle2 size={16} className="text-green-500" /> : <XCircle size={16} className="text-red-500" />}
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs font-semibold">{p.count}</span>
                         <button
-                          onClick={() => deleteEntry(result.id)}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-900/30 transition"
-                          style={{ color: "var(--muted)" }}
-                          title="Delete entry"
-                        >
-                          <Trash2 size={12} />
+                          onClick={() => { setSelectedProvider(p.slug || ""); setTab("results"); loadResults(1); }}
+                          className="p-1 rounded hover:bg-gray-700 transition text-blue-400" title="View this group">
+                          <ChevronRight size={12} />
                         </button>
                       </div>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))}
+                </div>
+              </div>
+
+              {/* Top domains */}
+              <div className="glass rounded-xl p-5">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2"><Globe size={15} /> Top Domains</h3>
+                <div className="space-y-2">
+                  {stats.topDomains.map((d, i) => (
+                    <div key={d.domain}>
+                      <div className="flex items-center justify-between text-xs mb-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-4 text-center font-bold opacity-40">{i + 1}</span>
+                          <span className="font-mono truncate max-w-32">{d.domain}</span>
+                          {d.provider && <span className={`px-1.5 py-0.5 rounded text-xs border ${badgeClass(null)}`}>{d.provider}</span>}
+                        </div>
+                        <span style={{ color: "var(--muted)" }}>{d.total}</span>
+                      </div>
+                      <div className="w-full h-1 bg-gray-800 rounded-full overflow-hidden ml-6">
+                        <div className="h-full bg-blue-600 rounded-full" style={{ width: `${Math.min((d.total / (stats.topDomains[0]?.total || 1)) * 100, 100)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sessions */}
+              <div className="glass rounded-xl p-5">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2"><Clock size={15} /> Scan Sessions</h3>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {stats.sessions.length === 0 ? (
+                    <p className="text-xs text-center py-8" style={{ color: "var(--muted)" }}>No sessions yet</p>
+                  ) : stats.sessions.map(s => (
+                    <div key={s.id} className="p-3 rounded-lg bg-gray-800/50 border border-gray-700/50">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <button onClick={() => { setSelectedSession(s.id); setTab("results"); loadResults(1); }}
+                            className="text-xs font-medium hover:text-blue-400 transition text-left truncate block w-full">{s.name}</button>
+                          <div className="flex gap-2 mt-0.5 text-xs" style={{ color: "var(--muted)" }}>
+                            <span>{s.totalCount} scanned</span>
+                            {s.konsolehCount > 0 && <span className="text-emerald-400">{s.konsolehCount} KH</span>}
+                            {s.cpanelCount > 0 && <span className="text-blue-400">{s.cpanelCount} cPanel</span>}
+                          </div>
+                          <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>{new Date(s.createdAt).toLocaleString()}</div>
+                        </div>
+                        <button onClick={() => deleteSession(s.id)} className="p-1 rounded hover:bg-red-900/30 text-red-500 shrink-0"><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </main>
   );
 }
 
-function StatCard({ icon, label, value, subtitle }: {
-  icon: React.ReactNode; label: string; value: string; subtitle?: string;
+// ─────────── Provider Group Component ───────────
+function ProviderGroup({ slug, name, panel, emails, expandedId, onToggle, onDelete, onCopy, onDownload, hasMore, total, onLoadMore }: {
+  slug: string | null; name: string; panel: string | null;
+  emails: EmailEntry[]; expandedId: string | null;
+  onToggle: (id: string) => void; onDelete: (id: string) => void;
+  onCopy: (t: string) => void; onDownload: (fmt: "txt" | "csv") => void;
+  hasMore?: boolean; total?: number; onLoadMore?: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [showDlMenu, setShowDlMenu] = useState(false);
+
   return (
-    <div className="glass rounded-xl p-4">
-      <div className="flex items-center gap-2 mb-1">
-        {icon}
-        <span className="text-xs" style={{ color: "var(--muted)" }}>{label}</span>
+    <div className="glass rounded-xl overflow-hidden">
+      {/* Group header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-700/50 bg-gray-800/30">
+        <button onClick={() => setCollapsed(!collapsed)} className="flex items-center gap-2 flex-1 min-w-0">
+          <ChevronRight size={14} className={`shrink-0 transition-transform ${collapsed ? "" : "rotate-90"}`} style={{ color: "var(--muted)" }} />
+          <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold ${badgeClass(slug)}`}>{name}</span>
+          {panel && <span className="text-xs opacity-50 hidden sm:block">{panel}</span>}
+          <span className="text-xs ml-1" style={{ color: "var(--muted)" }}>{emails.length.toLocaleString()} emails</span>
+        </button>
+
+        {/* Per-group download */}
+        <div className="relative shrink-0">
+          <button onClick={() => setShowDlMenu(!showDlMenu)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 transition text-xs">
+            <Download size={12} /> Download <ChevronDown size={10} />
+          </button>
+          {showDlMenu && (
+            <div className="absolute right-0 top-9 z-30 glass rounded-xl shadow-2xl py-1.5 w-48 fade-in">
+              <button onClick={() => { onDownload("txt"); setShowDlMenu(false); }}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center gap-2">
+                <FileText size={12} /> Email list (.txt)
+              </button>
+              <button onClick={() => { onDownload("csv"); setShowDlMenu(false); }}
+                className="w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center gap-2">
+                <FileText size={12} /> Full details (.csv)
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="text-xl font-bold">{value}</div>
-      {subtitle && <div className="text-xs" style={{ color: "var(--muted)" }}>{subtitle}</div>}
+
+      {/* Rows */}
+      {!collapsed && (
+        <div className="divide-y divide-gray-700/30">
+          {emails.map(r => (
+            <ResultRow key={r.id} result={r} expanded={expandedId === r.id}
+              onToggle={() => onToggle(r.id)} onDelete={() => onDelete(r.id)} onCopy={onCopy} />
+          ))}
+          {hasMore && onLoadMore && (
+            <button onClick={onLoadMore}
+              className="w-full py-2.5 text-xs hover:bg-gray-800 transition" style={{ color: "var(--muted)" }}>
+              Load more ({(total || 0) - emails.length} remaining)
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// ─────────── Result Row ───────────
+function ResultRow({ result, expanded, onToggle, onDelete, onCopy }: {
+  result: EmailEntry; expanded: boolean;
+  onToggle: () => void; onDelete: () => void; onCopy: (t: string) => void;
+}) {
+  return (
+    <div className={`transition ${expanded ? "bg-gray-800/20" : "hover:bg-gray-800/20"}`}>
+      <div className="flex items-center gap-2 px-4 py-2 cursor-pointer" onClick={onToggle}>
+        <ChevronRight size={12} className={`shrink-0 transition-transform opacity-40 ${expanded ? "rotate-90" : ""}`} />
+        <div className="flex-1 min-w-0">
+          <span className="font-mono text-xs truncate block">{result.email}</span>
+          {result.detectionMethod && result.detectionMethod !== "none" && (
+            <span className="text-xs opacity-40">via {result.detectionMethod} · {result.confidence}</span>
+          )}
+        </div>
+        {!result.domainExists && <span className="text-xs text-red-400 shrink-0">No domain</span>}
+        <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+          <button onClick={() => onCopy(result.email)} className="p-1 rounded hover:bg-gray-700 transition opacity-50 hover:opacity-100"><Copy size={11} /></button>
+          <button onClick={onDelete} className="p-1 rounded hover:bg-red-900/30 transition text-red-500 opacity-50 hover:opacity-100"><Trash2 size={11} /></button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="px-6 pb-3 fade-in">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-xs mb-2">
+            <InfoRow label="Domain" value={result.domain} />
+            <InfoRow label="IP" value={result.aRecord || "—"} />
+            <InfoRow label="Panel" value={result.providerPanel || "—"} />
+            <InfoRow label="Country" value={result.providerCountry || "—"} />
+            <InfoRow label="Detection" value={result.detectionMethod || "—"} />
+            <InfoRow label="Confidence" value={result.confidence || "—"} />
+            {result.notes && <InfoRow label="Note" value={result.notes} />}
+          </div>
+          {result.nsRecords?.length > 0 && (
+            <div className="mb-1.5">
+              <span className="text-xs font-semibold opacity-50">NS: </span>
+              <span className="font-mono text-xs">{result.nsRecords.join(" · ")}</span>
+            </div>
+          )}
+          {result.mxRecords?.length > 0 && (
+            <div>
+              <span className="text-xs font-semibold opacity-50">MX: </span>
+              <span className="font-mono text-xs">{result.mxRecords.join(" · ")}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LiveRow({ result, onCopy }: { result: EmailEntry; onCopy: (t: string) => void }) {
+  return (
+    <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs group ${result.isKonsoleh ? "bg-emerald-950/30 border border-emerald-900/30" : result.isCpanel ? "bg-blue-950/20 border border-blue-900/20" : "bg-gray-800/30"}`}>
+      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${result.isKonsoleh ? "bg-emerald-400" : result.isCpanel ? "bg-blue-400" : result.domainExists ? "bg-gray-500" : "bg-red-500"}`} />
+      <span className="font-mono truncate flex-1">{result.email}</span>
+      {result.providerName && <span className={`px-1.5 py-0.5 rounded border text-xs shrink-0 ${badgeClass(result.providerSlug)}`}>{result.providerName.split(" ")[0]}</span>}
+      <button onClick={() => onCopy(result.email)} className="opacity-0 group-hover:opacity-100 transition"><Copy size={11} style={{ color: "var(--muted)" }} /></button>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return <div><span style={{ color: "var(--muted)" }}>{label}: </span><span className="font-medium">{value}</span></div>;
+}
+
+function MiniStat({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="text-center p-1.5 rounded-lg bg-gray-900/40">
+      <div className={`text-base font-bold ${color}`}>{value}</div>
+      <div className="text-xs" style={{ color: "var(--muted)" }}>{label}</div>
+    </div>
+  );
+}
+
+function StatCard({ icon, label, value, subtitle }: { icon: React.ReactNode; label: string; value: string; subtitle?: string }) {
+  return (
+    <div className="glass rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-1">{icon}<span className="text-xs" style={{ color: "var(--muted)" }}>{label}</span></div>
+      <div className="text-2xl font-bold">{value}</div>
+      {subtitle && <div className="text-xs mt-0.5" style={{ color: "var(--muted)" }}>{subtitle}</div>}
+    </div>
+  );
+}
+
+function badgeClass(slug: string | null) {
+  const map: Record<string, string> = {
+    konsoleh: "bg-emerald-900/40 text-emerald-300 border-emerald-800/40",
+    afrihost: "bg-blue-900/40 text-blue-300 border-blue-800/40",
+    "1grid": "bg-orange-900/40 text-orange-300 border-orange-800/40",
+    elitehost: "bg-purple-900/40 text-purple-300 border-purple-800/40",
+    hostafrica: "bg-red-900/40 text-red-300 border-red-800/40",
+    cybersmart: "bg-cyan-900/40 text-cyan-300 border-cyan-800/40",
+    cloudflare: "bg-orange-900/40 text-orange-300 border-orange-800/40",
+    google: "bg-blue-900/40 text-blue-300 border-blue-800/40",
+    microsoft: "bg-sky-900/40 text-sky-300 border-sky-800/40",
+    godaddy: "bg-green-900/40 text-green-300 border-green-800/40",
+    ionos: "bg-indigo-900/40 text-indigo-300 border-indigo-800/40",
+  };
+  return map[slug || ""] || "bg-gray-800/60 text-gray-300 border-gray-700/40";
 }

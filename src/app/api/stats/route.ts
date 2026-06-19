@@ -10,32 +10,50 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const [total, konsolehCount, validCount, sessions] = await Promise.all([
+    const [total, konsolehCount, cpanelCount, sessions, providerBreakdown] = await Promise.all([
       db.emailEntry.count(),
       db.emailEntry.count({ where: { isKonsoleh: true } }),
-      db.emailEntry.count({ where: { smtpVerified: true } }),
-      db.verificationSession.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+      db.emailEntry.count({ where: { isCpanel: true } }),
+      db.verificationSession.findMany({ orderBy: { createdAt: "desc" }, take: 30 }),
+      db.emailEntry.groupBy({
+        by: ["providerSlug", "providerName", "providerPanel", "providerCountry"],
+        _count: { providerSlug: true },
+        where: { providerSlug: { not: null } },
+        orderBy: { _count: { providerSlug: "desc" } },
+      }),
     ]);
 
-    const allEntries = await db.emailEntry.findMany({ select: { domain: true, isKonsoleh: true } });
-    const domainMap = new Map<string, { total: number; konsoleh: number }>();
-    allEntries.forEach((e) => {
-      const current = domainMap.get(e.domain) || { total: 0, konsoleh: 0 };
-      current.total++;
-      if (e.isKonsoleh) current.konsoleh++;
-      domainMap.set(e.domain, current);
+    const topDomains = await db.emailEntry.groupBy({
+      by: ["domain"],
+      _count: { domain: true },
+      orderBy: { _count: { domain: "desc" } },
+      take: 10,
     });
 
-    const topDomains = Array.from(domainMap.entries())
-      .map(([domain, stats]) => ({ domain, ...stats }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 10);
+    const domainDetails = await Promise.all(
+      topDomains.map(async d => {
+        const kh = await db.emailEntry.count({ where: { domain: d.domain, isKonsoleh: true } });
+        const cp = await db.emailEntry.count({ where: { domain: d.domain, isCpanel: true } });
+        const provider = await db.emailEntry.findFirst({ where: { domain: d.domain, providerSlug: { not: null } }, select: { providerName: true } });
+        return { domain: d.domain, total: d._count.domain, konsoleh: kh, cpanel: cp, provider: provider?.providerName };
+      })
+    );
 
     return NextResponse.json({
-      total, konsolehCount, validCount,
+      total,
+      konsolehCount,
+      cpanelCount,
       konsolehPercentage: total > 0 ? ((konsolehCount / total) * 100).toFixed(1) : "0",
+      cpanelPercentage: total > 0 ? ((cpanelCount / total) * 100).toFixed(1) : "0",
       sessions,
-      topDomains,
+      topDomains: domainDetails,
+      providerBreakdown: providerBreakdown.map(p => ({
+        slug: p.providerSlug,
+        name: p.providerName,
+        panel: p.providerPanel,
+        country: p.providerCountry,
+        count: p._count.providerSlug,
+      })),
     });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message }, { status: 500 });

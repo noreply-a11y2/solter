@@ -20,48 +20,71 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No emails provided" }, { status: 400 });
     }
 
+    // Find already-scanned emails
+    const normalised = emails.map((e: string) => e.toLowerCase().trim());
+    const existing = await db.emailEntry.findMany({
+      where: { email: { in: normalised } },
+      select: { email: true },
+    });
+    const existingSet = new Set(existing.map(e => e.email));
+    const newEmails = emails.filter((e: string) => !existingSet.has(e.toLowerCase().trim()));
+    const skippedCount = emails.length - newEmails.length;
+
     if (progressId) {
-      progressStore.set(progressId, { completed: 0, total: emails.length, done: false });
+      progressStore.set(progressId, {
+        completed: 0, total: newEmails.length, done: false, stopped: false,
+        skipped: skippedCount, konsolehFound: 0, cpanelFound: 0, currentEmail: "",
+      });
     }
 
-    console.log(`Starting verification of ${emails.length} emails...`);
-
-    const results = await verifyEmailBatch(emails, 15, (completed, total) => {
+    const results = await verifyEmailBatch(newEmails, 25, (completed, total, currentEmail, konsolehFound, cpanelFound) => {
       if (progressId) {
-        progressStore.set(progressId, { completed, total, done: false });
+        const cur = progressStore.get(progressId);
+        if (cur?.stopped) return true;
+        progressStore.set(progressId, { completed, total, done: false, stopped: false, skipped: skippedCount, konsolehFound, cpanelFound, currentEmail });
+        return false;
       }
+      return false;
     });
 
     let konsolehCount = 0;
-    let validCount = 0;
+    let cpanelCount = 0;
 
     let verificationSession = null;
-    if (sessionName) {
+    if (sessionName && results.length > 0) {
       verificationSession = await db.verificationSession.create({
         data: {
           name: sessionName,
-          totalCount: results.length,
-          konsolehCount: results.filter(r => r.isKonsoleh).length,
-          validCount: results.filter(r => r.smtpVerified).length,
+          totalCount: results.length + skippedCount,
+          konsolehCount: results.filter(r => r.domainResult.isKonsoleh).length,
+          cpanelCount: results.filter(r => r.domainResult.isCpanel).length,
         },
       });
     }
 
     for (const result of results) {
-      if (result.isKonsoleh) konsolehCount++;
-      if (result.smtpVerified) validCount++;
+      const dr = result.domainResult;
+      if (dr.isKonsoleh) konsolehCount++;
+      if (dr.isCpanel) cpanelCount++;
 
       await db.emailEntry.upsert({
         where: { email: result.email },
         update: {
           domain: result.domain,
           formatValid: result.formatValid,
-          domainExists: result.domainExists,
-          mxRecords: result.mxRecords.length > 0 ? JSON.stringify(result.mxRecords) : null,
-          isKonsoleh: result.isKonsoleh,
-          konsolehServer: result.konsolehServer,
-          smtpVerified: result.smtpVerified,
-          notes: result.error || null,
+          domainExists: dr.domainExists,
+          nsRecords: dr.nsRecords.length > 0 ? JSON.stringify(dr.nsRecords) : null,
+          mxRecords: dr.mxRecords.length > 0 ? JSON.stringify(dr.mxRecords) : null,
+          aRecord: dr.aRecord,
+          providerSlug: dr.provider?.slug || null,
+          providerName: dr.provider?.name || null,
+          providerPanel: dr.provider?.panel || null,
+          providerCountry: dr.provider?.country || null,
+          detectionMethod: dr.detectionMethod,
+          confidence: dr.confidence,
+          isKonsoleh: dr.isKonsoleh,
+          isCpanel: dr.isCpanel,
+          notes: dr.error || null,
           verifiedAt: new Date(),
           sessionId: verificationSession?.id || null,
         },
@@ -69,39 +92,45 @@ export async function POST(req: NextRequest) {
           email: result.email,
           domain: result.domain,
           formatValid: result.formatValid,
-          domainExists: result.domainExists,
-          mxRecords: result.mxRecords.length > 0 ? JSON.stringify(result.mxRecords) : null,
-          isKonsoleh: result.isKonsoleh,
-          konsolehServer: result.konsolehServer,
-          smtpVerified: result.smtpVerified,
-          notes: result.error || null,
+          domainExists: dr.domainExists,
+          nsRecords: dr.nsRecords.length > 0 ? JSON.stringify(dr.nsRecords) : null,
+          mxRecords: dr.mxRecords.length > 0 ? JSON.stringify(dr.mxRecords) : null,
+          aRecord: dr.aRecord,
+          providerSlug: dr.provider?.slug || null,
+          providerName: dr.provider?.name || null,
+          providerPanel: dr.provider?.panel || null,
+          providerCountry: dr.provider?.country || null,
+          detectionMethod: dr.detectionMethod,
+          confidence: dr.confidence,
+          isKonsoleh: dr.isKonsoleh,
+          isCpanel: dr.isCpanel,
+          notes: dr.error || null,
           sessionId: verificationSession?.id || null,
         },
       });
     }
 
     if (progressId) {
-      progressStore.set(progressId, { completed: results.length, total: results.length, done: true });
-      setTimeout(() => progressStore.delete(progressId), 60000);
+      const cur = progressStore.get(progressId);
+      progressStore.set(progressId, { ...(cur || { completed: results.length, total: results.length, skipped: skippedCount, konsolehFound: konsolehCount, cpanelFound: cpanelCount, currentEmail: "" }), done: true, stopped: cur?.stopped || false });
+      setTimeout(() => progressStore.delete(progressId), 120000);
     }
 
-    return NextResponse.json({
-      success: true,
-      total: results.length,
-      konsolehCount,
-      validCount,
-      results: results.map((r) => ({
-        email: r.email,
-        domain: r.domain,
-        isKonsoleh: r.isKonsoleh,
-        konsolehServer: r.konsolehServer,
-        smtpVerified: r.smtpVerified,
-        mxRecords: r.mxRecords,
-        error: r.error,
-      })),
-    });
+    return NextResponse.json({ success: true, total: results.length, skippedCount, konsolehCount, cpanelCount });
   } catch (error: any) {
     console.error("Verification error:", error);
     return NextResponse.json({ error: error?.message || "Verification failed" }, { status: 500 });
   }
+}
+
+export async function DELETE(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "No ID" }, { status: 400 });
+
+  const cur = progressStore.get(id);
+  if (cur) progressStore.set(id, { ...cur, stopped: true });
+  return NextResponse.json({ success: true });
 }

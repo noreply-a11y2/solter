@@ -8,19 +8,26 @@ datasource db {
 }
 
 model EmailEntry {
-  id              String   @id @default(cuid())
-  email           String   @unique
-  domain          String
-  formatValid     Boolean  @default(false)
-  domainExists    Boolean  @default(false)
-  mxRecords       String?
-  isKonsoleh      Boolean  @default(false)
-  konsolehServer  String?
-  smtpVerified    Boolean  @default(false)
-  verifiedAt      DateTime @default(now())
-  notes           String?
-  sessionId       String?
-  session         VerificationSession? @relation(fields: [sessionId], references: [id])
+  id               String   @id @default(cuid())
+  email            String   @unique
+  domain           String
+  formatValid      Boolean  @default(false)
+  domainExists     Boolean  @default(false)
+  nsRecords        String?
+  mxRecords        String?
+  aRecord          String?
+  providerSlug     String?
+  providerName     String?
+  providerPanel    String?
+  providerCountry  String?
+  detectionMethod  String?
+  confidence       String?
+  isKonsoleh       Boolean  @default(false)
+  isCpanel         Boolean  @default(false)
+  verifiedAt       DateTime @default(now())
+  notes            String?
+  sessionId        String?
+  session          VerificationSession? @relation(fields: [sessionId], references: [id])
 }
 
 model VerificationSession {
@@ -28,7 +35,7 @@ model VerificationSession {
   name          String
   totalCount    Int
   konsolehCount Int          @default(0)
-  validCount    Int          @default(0)
+  cpanelCount   Int          @default(0)
   createdAt     DateTime     @default(now())
   entries       EmailEntry[]
 }

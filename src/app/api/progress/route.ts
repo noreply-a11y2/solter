@@ -13,6 +13,6 @@ export async function GET(req: NextRequest) {
   if (!id) return NextResponse.json({ error: "No progress ID" }, { status: 400 });
 
   const progress = progressStore.get(id);
-  if (!progress) return NextResponse.json({ completed: 0, total: 0, done: false });
+  if (!progress) return NextResponse.json({ completed: 0, total: 0, done: false, stopped: false, skipped: 0, konsolehFound: 0, smtpValid: 0, currentEmail: "" });
   return NextResponse.json(progress);
 }

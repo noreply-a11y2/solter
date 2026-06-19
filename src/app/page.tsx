@@ -241,7 +241,7 @@ export default function Home() {
       const fetched: EmailEntry[] = [];
       while (true) {
         params.set("page", String(page));
-        const res = await fetch(\`/api/results?\${params}\`);
+        const res = await fetch(`/api/results?${params}`);
         const data = await res.json();
         fetched.push(...(data.results || []));
         if (!data.hasMore) break;

@@ -253,8 +253,8 @@ export default function Home() {
       // Group by provider, each with a header
       const groups = groupByProvider(data);
       const lines: string[] = [];
-      for (const [slug, group] of Array.from(groups)) {
-        const name = group.emails[0]?.providerName || "Unknown";
+      for (const group of groups) {
+        const name = group.name || "Unknown";
         lines.push(`# ${name} (${group.emails.length} emails)`);
         lines.push(...group.emails.map(r => r.email));
         lines.push("");
@@ -285,20 +285,19 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  // Group results by provider
-  function groupByProvider(results: EmailEntry[]): Map<string, { name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }> {
-    const map = new Map<string, { name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }>();
+  // Group results by provider — returns plain array to avoid Map iteration TS issues
+  function groupByProvider(results: EmailEntry[]): { key: string; name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }[] {
+    const obj: Record<string, { key: string; name: string | null; slug: string | null; panel: string | null; emails: EmailEntry[] }> = {};
     for (const r of results) {
       const key = r.providerSlug || "__unknown__";
-      if (!map.has(key)) map.set(key, { name: r.providerName, slug: r.providerSlug, panel: r.providerPanel, emails: [] });
-      map.get(key)!.emails.push(r);
+      if (!obj[key]) obj[key] = { key, name: r.providerName, slug: r.providerSlug, panel: r.providerPanel, emails: [] };
+      obj[key].emails.push(r);
     }
-    // Sort: known providers first, then by count desc
-    return new Map([...map.entries()].sort((a, b) => {
-      if (a[0] === "__unknown__") return 1;
-      if (b[0] === "__unknown__") return -1;
-      return b[1].emails.length - a[1].emails.length;
-    }));
+    return Object.values(obj).sort((a, b) => {
+      if (a.key === "__unknown__") return 1;
+      if (b.key === "__unknown__") return -1;
+      return b.emails.length - a.emails.length;
+    });
   }
 
   const emailCount = emails.split(/[\n,;]/).filter(e => e.trim().includes("@")).length;
@@ -567,9 +566,9 @@ export default function Home() {
             ) : (
               /* All providers grouped */
               <>
-                {[...Array.from(providerGroups.entries())].map(([key, group]) => (
+                {providerGroups.map((group) => (
                   <ProviderGroup
-                    key={key}
+                    key={group.key}
                     slug={group.slug}
                     name={group.name || "Unknown / Undetected"}
                     panel={group.panel}

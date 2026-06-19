@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model EmailEntry {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  domain          String
+  formatValid     Boolean  @default(false)
+  domainExists    Boolean  @default(false)
+  mxRecords       String?
+  isKonsoleh      Boolean  @default(false)
+  konsolehServer  String?
+  smtpVerified    Boolean  @default(false)
+  verifiedAt      DateTime @default(now())
+  notes           String?
+  sessionId       String?
+  session         VerificationSession? @relation(fields: [sessionId], references: [id])
+}
+
+model VerificationSession {
+  id            String       @id @default(cuid())
+  name          String
+  totalCount    Int
+  konsolehCount Int          @default(0)
+  validCount    Int          @default(0)
+  createdAt     DateTime     @default(now())
+  entries       EmailEntry[]
+}
+
+model User {
+  id        String    @id @default(cuid())
+  username  String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  sessions  Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  expires   DateTime
+  createdAt DateTime @default(now())
+}

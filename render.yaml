@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: konsoleh-verifier
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    disk:
+      name: konsoleh-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        value: file:/app/data/prod.db
+      - key: NEXTAUTH_URL
+        fromService:
+          type: web
+          name: konsoleh-verifier
+          property: host
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /
+    autoDeploy: true

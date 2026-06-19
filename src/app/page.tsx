@@ -499,7 +499,7 @@ export default function Home() {
             {/* Toolbar */}
             <div className="glass rounded-xl p-4 flex flex-wrap items-center gap-3" style={{ position: "relative", zIndex: 100, overflow: "visible" }}>
               {/* Provider filter dropdown */}
-              <div className="relative">
+              <div className="relative" onClick={e => e.stopPropagation()}>
                 <button onClick={() => setShowProviderMenu(!showProviderMenu)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 transition text-sm">
                   <Filter size={13} />
@@ -546,7 +546,7 @@ export default function Home() {
                 <button onClick={() => loadResults(1)} className="p-2 rounded-lg hover:bg-gray-800 transition" title="Refresh"><RefreshCw size={14} /></button>
 
                 {/* Download All menu */}
-                <div className="relative">
+                <div className="relative" onClick={e => e.stopPropagation()}>
                   <button onClick={() => setShowExportAllMenu(!showExportAllMenu)} disabled={allResults.length === 0}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-50 transition text-xs font-medium">
                     <Download size={13} /> Download All <ChevronDown size={11} />

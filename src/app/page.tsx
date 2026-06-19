@@ -829,19 +829,4 @@ function StatCard({ icon, label, value, subtitle }: { icon: React.ReactNode; lab
   );
 }
 
-function badgeClass(slug: string | null) {
-  const map: Record<string, string> = {
-    konsoleh: "bg-emerald-900/40 text-emerald-300 border-emerald-800/40",
-    afrihost: "bg-blue-900/40 text-blue-300 border-blue-800/40",
-    "1grid": "bg-orange-900/40 text-orange-300 border-orange-800/40",
-    elitehost: "bg-purple-900/40 text-purple-300 border-purple-800/40",
-    hostafrica: "bg-red-900/40 text-red-300 border-red-800/40",
-    cybersmart: "bg-cyan-900/40 text-cyan-300 border-cyan-800/40",
-    cloudflare: "bg-orange-900/40 text-orange-300 border-orange-800/40",
-    google: "bg-blue-900/40 text-blue-300 border-blue-800/40",
-    microsoft: "bg-sky-900/40 text-sky-300 border-sky-800/40",
-    godaddy: "bg-green-900/40 text-green-300 border-green-800/40",
-    ionos: "bg-indigo-900/40 text-indigo-300 border-indigo-800/40",
-  };
-  return map[slug || ""] || "bg-gray-800/60 text-gray-300 border-gray-700/40";
-}
+

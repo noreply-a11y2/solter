@@ -459,9 +459,9 @@ export default function Home() {
 
         {/* ── RESULTS TAB — grouped by provider ── */}
         {tab === "results" && (
-          <div className="fade-in space-y-4">
+          <div className="fade-in space-y-4" style={{ position: "relative" }} onClick={() => { setShowProviderMenu(false); setShowExportAllMenu(false); }}>
             {/* Toolbar */}
-            <div className="glass rounded-xl p-4 flex flex-wrap items-center gap-3">
+            <div className="glass rounded-xl p-4 flex flex-wrap items-center gap-3" style={{ position: "relative", zIndex: 100, overflow: "visible" }}>
               {/* Provider filter dropdown */}
               <div className="relative">
                 <button onClick={() => setShowProviderMenu(!showProviderMenu)}
@@ -471,7 +471,7 @@ export default function Home() {
                   <ChevronDown size={12} />
                 </button>
                 {showProviderMenu && (
-                  <div className="absolute left-0 top-10 z-30 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in max-h-72 overflow-y-auto">
+                  <div className="absolute left-0 top-10 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in max-h-72 overflow-y-auto" style={{ zIndex: 9999, position: "absolute" }}>
                     <button onClick={() => { setSelectedProvider("all"); setShowProviderMenu(false); loadResults(1); }}
                       className={`w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition ${selectedProvider === "all" ? "text-blue-400 font-semibold" : ""}`}>
                       All Providers ({totalResults.toLocaleString()})
@@ -516,7 +516,7 @@ export default function Home() {
                     <Download size={13} /> Download All <ChevronDown size={11} />
                   </button>
                   {showExportAllMenu && (
-                    <div className="absolute right-0 top-10 z-30 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in">
+                    <div className="absolute right-0 top-10 glass rounded-xl shadow-2xl py-1.5 w-56 fade-in" style={{ zIndex: 9999, position: "absolute" }}>
                       <div className="px-4 py-1 text-xs font-semibold" style={{ color: "var(--muted)" }}>Download All Results</div>
                       {[
                         { label: "All emails — grouped by host (.txt)", fmt: "grouped-txt" },
@@ -711,7 +711,7 @@ function ProviderGroup({ slug, name, panel, emails, expandedId, onToggle, onDele
             <Download size={12} /> Download <ChevronDown size={10} />
           </button>
           {showDlMenu && (
-            <div className="absolute right-0 top-9 z-30 glass rounded-xl shadow-2xl py-1.5 w-48 fade-in">
+            <div className="absolute right-0 top-9 glass rounded-xl shadow-2xl py-1.5 w-48 fade-in" style={{ zIndex: 9999, position: "absolute" }}>
               <button onClick={() => { onDownload("txt"); setShowDlMenu(false); }}
                 className="w-full text-left px-4 py-2 text-xs hover:bg-gray-700 transition flex items-center gap-2">
                 <FileText size={12} /> Email list (.txt)

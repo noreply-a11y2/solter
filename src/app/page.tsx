@@ -280,7 +280,41 @@ export default function Home() {
     }
   }
 
-  function triggerDownload(content: string, filename: string, mime: string) {
+  async function downloadZip() {
+    setShowExportAllMenu(false);
+    const groups = groupByProvider(allResults);
+    const zip = new JSZip();
+    const folder = zip.folder("hosting-results")!;
+
+    for (const group of groups) {
+      const safeName = (group.name || "unknown").replace(/[^a-z0-9]/gi, "_").toLowerCase();
+      const lines: string[] = [];
+      lines.push(`# ${group.name || "Unknown"} (${group.emails.length} emails)`);
+      if (group.panel) lines.push(`# Panel: ${group.panel}`);
+      lines.push(`# Generated: ${new Date().toLocaleString()}`);
+      lines.push("");
+      lines.push(...group.emails.map(r => r.email));
+      folder.file(`${safeName}.txt`, lines.join("\n"));
+    }
+
+    const csvLines = [
+      ["Email", "Domain", "Provider", "Panel", "Country", "Detection", "NS Records", "MX Records"].join(","),
+      ...allResults.map(r => [
+        r.email, r.domain, r.providerName || "Unknown", r.providerPanel || "-",
+        r.providerCountry || "-", r.detectionMethod || "-",
+        (r.nsRecords || []).join("; "), (r.mxRecords || []).join("; "),
+      ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
+    ];
+    folder.file("_all_results.csv", csvLines.join("\n"));
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `hosting-results-${Date.now()}.zip`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+    function triggerDownload(content: string, filename: string, mime: string) {
     const blob = new Blob([content], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = filename; a.click();

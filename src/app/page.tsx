@@ -253,7 +253,7 @@ export default function Home() {
       // Group by provider, each with a header
       const groups = groupByProvider(data);
       const lines: string[] = [];
-      for (const [slug, group] of groups) {
+      for (const [slug, group] of Array.from(groups)) {
         const name = group.emails[0]?.providerName || "Unknown";
         lines.push(`# ${name} (${group.emails.length} emails)`);
         lines.push(...group.emails.map(r => r.email));
@@ -567,7 +567,7 @@ export default function Home() {
             ) : (
               /* All providers grouped */
               <>
-                {[...providerGroups.entries()].map(([key, group]) => (
+                {[...Array.from(providerGroups.entries())].map(([key, group]) => (
                   <ProviderGroup
                     key={key}
                     slug={group.slug}
